@@ -9,8 +9,8 @@ mc:
   normalize: true
 
 llm:
-  endpoint: http://127.0.0.1:8000/generate
-  model: Qwen2.5-7B-Instruct
+  endpoint: http://127.0.0.1:8000/v1/chat/completions
+  model: /data/zhangjingwei/LL-Doctor-qwen3-8b-Model
   max_new_tokens: 220
   temperature: 0.7
   top_p: 0.95

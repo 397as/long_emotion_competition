@@ -23,7 +23,9 @@ def load_config(path: str) -> Dict[str, Any]:
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the MC emotional conversation pipeline")
+    parser = argparse.ArgumentParser(
+        description="Run the MC emotional conversation pipeline"
+    )
     parser.add_argument(
         "--config",
         default="src/config.yaml",
@@ -43,7 +45,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
 
     parser = build_argument_parser()
     args = parser.parse_args()
@@ -88,8 +93,8 @@ def main() -> None:
         draft = generate_reply(
             MC_SYSTEM,
             user_prompt,
-            llm_cfg.get("model", "Qwen2.5-7B-Instruct"),
-            llm_cfg.get("endpoint", "http://127.0.0.1:8000/generate"),
+            llm_cfg.get("model", "/data/zhangjingwei/LL-Doctor-qwen3-8b-Model"),
+            llm_cfg.get("endpoint", "http://127.0.0.1:8000/v1/chat/completions"),
             llm_cfg.get("max_new_tokens", 220),
             llm_cfg.get("temperature", 0.7),
             llm_cfg.get("top_p", 0.95),
@@ -108,8 +113,8 @@ def main() -> None:
                 draft,
                 JUDGE_SYSTEM,
                 JUDGE_USER_FMT,
-                llm_cfg.get("endpoint", "http://127.0.0.1:8000/generate"),
-                llm_cfg.get("model", "Qwen2.5-7B-Instruct"),
+                llm_cfg.get("endpoint", "http://127.0.0.1:8000/v1/chat/completions"),
+                llm_cfg.get("model", "/data/zhangjingwei/LL-Doctor-qwen3-8b-Model"),
                 judge_cfg.get("min_pass_score", 3.5),
                 judge_cfg.get("max_refine", 1),
                 MC_SYSTEM,
@@ -127,4 +132,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
