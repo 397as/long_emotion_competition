@@ -3,8 +3,8 @@ mc:
   overlap_tokens: 20
   retriever_topk: 4
   use_faiss: true
-  index_path: ./indexes/mc_faiss.index
-  store_path: ./indexes/mc_store.jsonl
+  index_path: ./indexes/mc/faiss.index
+  store_path: ./indexes/mc/store.jsonl
   embed_model: BAAI/bge-m3
   normalize: true
 

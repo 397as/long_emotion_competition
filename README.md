@@ -41,6 +41,7 @@ python -m vllm.entrypoints.openai.api_server \
 使用默认配置处理示例数据：
 
 ```bash
+export HF_ENDPOINT=https://hf-mirror.com
 python -m src_mc.runner_mc \
   --config src_mc/config.yaml \
   --data data/Conversations_Long.jsonl \
@@ -53,6 +54,7 @@ python -m src_mc.runner_mc \
 ES 流水线会将案例材料拼接后检索相关片段，并生成五个结构化字段。使用默认配置处理示例数据：
 
 ```bash
+export HF_ENDPOINT=https://hf-mirror.com
 python -m src_es.runner_es \
   --config src_es/config_es.yaml \
   --data data/Emotion_Summary.jsonl \
