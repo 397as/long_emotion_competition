@@ -8,7 +8,8 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-from typing import Any, Dict
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from typing import Any, Dict, List
 
 import yaml
 
@@ -48,7 +49,70 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default="outputs/Emotion_Conversatin_Result.jsonl",
         help="Where to write the generated responses JSONL.",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
+        help="Number of concurrent LLM requests to process in parallel.",
+    )
     return parser
+
+
+def process_conversation(
+    case: Dict[str, Any],
+    llm_cfg: Dict[str, Any],
+    judge_cfg: Dict[str, Any],
+    max_retries: int,
+) -> Dict[str, str]:
+    """处理单个会话，生成回复并根据需要触发自审。"""
+
+    attempts = max(max_retries, 0) + 1
+    cid = case["id"]
+
+    for attempt in range(1, attempts + 1):
+        try:
+            draft = generate_reply(
+                MC_SYSTEM,
+                case["user_prompt"],
+                llm_cfg.get("model", "/data/zhangjingwei/LL-Doctor-qwen3-8b-Model"),
+                llm_cfg.get("endpoint", "http://127.0.0.1:8000/v1/chat/completions"),
+                llm_cfg.get("max_new_tokens", 220),
+                llm_cfg.get("temperature", 0.7),
+                llm_cfg.get("top_p", 0.95),
+            )
+
+            final = draft
+            if judge_cfg.get("enable", False):
+                generation_kwargs = {
+                    "max_new_tokens": llm_cfg.get("max_new_tokens", 220),
+                    "temperature": llm_cfg.get("temperature", 0.7),
+                    "top_p": llm_cfg.get("top_p", 0.95),
+                }
+                final = refine_with_judge(
+                    case["client_last"],
+                    case["evidence"],
+                    draft,
+                    JUDGE_SYSTEM,
+                    JUDGE_USER_FMT,
+                    llm_cfg.get("endpoint", "http://127.0.0.1:8000/v1/chat/completions"),
+                    llm_cfg.get("model", "/data/zhangjingwei/LL-Doctor-qwen3-8b-Model"),
+                    judge_cfg.get("min_pass_score", 3.5),
+                    judge_cfg.get("max_refine", 1),
+                    MC_SYSTEM,
+                    MC_USER_FMT,
+                    generation_kwargs,
+                )
+
+            return {"id": cid, "predicted_response": final}
+        except Exception:  # noqa: BLE001
+            LOGGER.exception(
+                "Processing conversation %s failed on attempt %d/%d", cid, attempt, attempts
+            )
+            if attempt < attempts:
+                LOGGER.info("Retrying conversation %s", cid)
+
+    LOGGER.error("Falling back to empty response for conversation %s", cid)
+    return {"id": cid, "predicted_response": ""}
 
 
 def main() -> None:
@@ -83,57 +147,75 @@ def main() -> None:
     llm_cfg = cfg.get("llm", {})
     judge_cfg = cfg.get("self_judge", {})
 
-    outputs = []
-    for item in conversations:
+    concurrency = args.concurrency or llm_cfg.get("concurrent_requests", 1)
+    concurrency = max(int(concurrency or 1), 1)
+    LOGGER.info("Using concurrency level: %d", concurrency)
+
+    request_timeout = llm_cfg.get("request_timeout")
+    timeout_value = float(request_timeout) if request_timeout is not None else None
+    max_retries = int(llm_cfg.get("max_retries", 0))
+
+    prepared_cases: List[Dict[str, Any]] = []
+    results: Dict[int, Dict[str, str]] = {}
+
+    for idx, item in enumerate(conversations):
         cid = item.get("id")
         dialog = item.get("conversation_history", "")
         client_last = last_client_turn(dialog)
 
         if not client_last:
             LOGGER.warning("Conversation %s has no client turn; skipping.", cid)
-            outputs.append({"id": cid, "predicted_response": ""})
+            results[idx] = {"id": cid, "predicted_response": ""}
             continue
 
-        # 使用检索器找到与来访者最后一句话最相关的历史片段
         hits = retriever.search(client_last, k=retriever_cfg.get("retriever_topk", 4))
         evidence = "\n".join(hit["text"] for hit in hits) if hits else ""
 
-        user_prompt = MC_USER_FMT.format(client_last=client_last, evidence=evidence)
-        # 先生成一版初稿，作为后续督导的输入
-        draft = generate_reply(
-            MC_SYSTEM,
-            user_prompt,
-            llm_cfg.get("model", "/data/zhangjingwei/LL-Doctor-qwen3-8b-Model"),
-            llm_cfg.get("endpoint", "http://127.0.0.1:8000/v1/chat/completions"),
-            llm_cfg.get("max_new_tokens", 220),
-            llm_cfg.get("temperature", 0.7),
-            llm_cfg.get("top_p", 0.95),
+        prepared_cases.append(
+            {
+                "index": idx,
+                "id": cid,
+                "client_last": client_last,
+                "evidence": evidence,
+                "user_prompt": MC_USER_FMT.format(
+                    client_last=client_last, evidence=evidence
+                ),
+            }
         )
 
-        final = draft
-        if judge_cfg.get("enable", False):
-            # 准备与生成模型一致的参数，确保润色时风格统一
-            generation_kwargs = {
-                "max_new_tokens": llm_cfg.get("max_new_tokens", 220),
-                "temperature": llm_cfg.get("temperature", 0.7),
-                "top_p": llm_cfg.get("top_p", 0.95),
-            }
-            final = refine_with_judge(
-                client_last,
-                evidence,
-                draft,
-                JUDGE_SYSTEM,
-                JUDGE_USER_FMT,
-                llm_cfg.get("endpoint", "http://127.0.0.1:8000/v1/chat/completions"),
-                llm_cfg.get("model", "/data/zhangjingwei/LL-Doctor-qwen3-8b-Model"),
-                judge_cfg.get("min_pass_score", 3.5),
-                judge_cfg.get("max_refine", 1),
-                MC_SYSTEM,
-                MC_USER_FMT,
-                generation_kwargs,
-            )
+    futures = []
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        for case in prepared_cases:
+            futures.append((case, executor.submit(process_conversation, case, llm_cfg, judge_cfg, max_retries)))
 
-        outputs.append({"id": cid, "predicted_response": final})
+        for case, future in futures:
+            try:
+                if timeout_value is not None:
+                    result = future.result(timeout=timeout_value)
+                else:
+                    result = future.result()
+            except TimeoutError:
+                LOGGER.error(
+                    "Processing conversation %s timed out after %s seconds", case["id"], request_timeout
+                )
+                future.cancel()
+                result = {"id": case["id"], "predicted_response": ""}
+            except Exception:
+                LOGGER.exception("Processing conversation %s failed", case["id"])
+                result = {"id": case["id"], "predicted_response": ""}
+
+            results[case["index"]] = result
+
+    outputs = [
+        results.get(
+            idx,
+            {
+                "id": conversations[idx].get("id"),
+                "predicted_response": "",
+            },
+        )
+        for idx in range(len(conversations))
+    ]
 
     output_dir = os.path.dirname(output_path) or "."
     os.makedirs(output_dir, exist_ok=True)
