@@ -13,6 +13,7 @@ ES 流水线用于从咨询案例材料中抽取结构化的情绪信息，包�
 3. **执行流水线**：
 
    ```bash
+   export HF_ENDPOINT=https://hf-mirror.com
    python -m src_es.runner_es \
      --config src_es/config_es.yaml \
      --data data/Emotion_Summary.jsonl \

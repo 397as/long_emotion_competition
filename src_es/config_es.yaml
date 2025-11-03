@@ -10,11 +10,11 @@ es:
   normalize: true
 
 llm:
-  endpoint: http://127.0.0.1:8000/generate
-  model: Qwen2.5-7B-Instruct
-  max_new_tokens: 512
-  temperature: 0.4
-  top_p: 0.9
+  endpoint: http://127.0.0.1:8000/v1/chat/completions
+  model: /data/zhangjingwei/LL-Doctor-qwen3-8b-Model
+  max_new_tokens: 30000
+  temperature: 0.7
+  top_p: 0.95
 
 per_field_queries:
   predicted_cause: "成因/诱因/触发事件/关系与工作变动/童年经历/疾病相关"
