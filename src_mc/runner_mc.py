@@ -160,6 +160,7 @@ def main() -> None:
 
     for idx, item in enumerate(conversations):
         cid = item.get("id")
+        case_id_str = str(cid)
         dialog = item.get("conversation_history", "")
         client_last = last_client_turn(dialog)
 
@@ -168,8 +169,37 @@ def main() -> None:
             results[idx] = {"id": cid, "predicted_response": ""}
             continue
 
-        hits = retriever.search(client_last, k=retriever_cfg.get("retriever_topk", 4))
-        evidence = "\n".join(hit["text"] for hit in hits) if hits else ""
+        top_k = int(retriever_cfg.get("retriever_topk", 4))
+        search_k = max(
+            int(
+                retriever_cfg.get(
+                    "retriever_search_k", retriever_cfg.get("retriever_topk", 4) * 4
+                )
+            ),
+            top_k,
+        )
+        hits = retriever.search(client_last, k=search_k)
+
+        filtered_hits = [
+            hit for hit in hits if str(hit.get("meta", {}).get("dialog_id")) == case_id_str
+        ]
+        filtered_hits.sort(key=lambda item: item.get("score", 0.0), reverse=True)
+        kept_hits = filtered_hits[:top_k]
+
+        if kept_hits:
+            evidence = "\n".join(hit["text"] for hit in kept_hits)
+        else:
+            fallback_source = dialog or client_last or ""
+            evidence = fallback_source
+
+        LOGGER.debug(
+            "Conversation %s retriever hits: total=%d filtered=%d kept=%d fallback=%s",
+            cid,
+            len(hits),
+            len(filtered_hits),
+            len(kept_hits),
+            not kept_hits,
+        )
 
         prepared_cases.append(
             {

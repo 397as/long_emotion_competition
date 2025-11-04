@@ -1,7 +1,8 @@
 mc:
   chunk_tokens: 128
   overlap_tokens: 20
-  retriever_topk: 4
+  retriever_topk: 4  # 推理阶段保留的历史证据数
+  retriever_search_k: 16  # 初始召回上限，建议为 topk 的 3-5 倍
   use_faiss: true
   index_path: ./indexes/mc/faiss.index
   store_path: ./indexes/mc/store.jsonl

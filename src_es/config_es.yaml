@@ -2,7 +2,8 @@ es:
   use_rag: true
   chunk_tokens: 128
   overlap_tokens: 20
-  retriever_topk: 4
+  retriever_topk: 4  # 最终用于提示的证据段数量
+  retriever_search_k: 16  # 初始召回候选数，可根据索引密度调整
   use_vector_store: true
   index_path: ./indexes/es/faiss.index
   store_path: ./indexes/es/store.jsonl

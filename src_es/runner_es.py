@@ -177,6 +177,7 @@ def process_case(
     queries: Dict[str, str],
 ) -> Dict[str, Any]:
     case_id = item.get("id")
+    case_id_str = str(case_id)
     merged_text = _merge_case(item)
     per_field: Dict[str, str] = {}
 
@@ -187,15 +188,36 @@ def process_case(
             per_field[field] = extracted or DEFAULT_FILL
         return {"id": case_id, **per_field}
 
-    top_k = es_cfg.get("retriever_topk", 4)
+    top_k = int(es_cfg.get("retriever_topk", 4))
+    search_k = max(int(es_cfg.get("retriever_search_k", top_k * 4)), top_k)
     for field in FIELDS:
         query = queries.get(field) if isinstance(queries, dict) else None
         query = (query or field).strip()
-        hits = retriever.search(query, k=top_k, prefer_client=False)
-        if hits:
-            evidence = "\n".join(hit["text"] for hit in hits)
+        hits = retriever.search(query, k=search_k, prefer_client=False)
+
+        total_hits = len(hits)
+        filtered_hits = [
+            hit for hit in hits if str(hit.get("meta", {}).get("dialog_id")) == case_id_str
+        ]
+        filtered_count = len(filtered_hits)
+        filtered_hits.sort(key=lambda item: item.get("score", 0.0), reverse=True)
+        filtered_hits = filtered_hits[:top_k]
+
+        fallback_used = False
+        if filtered_hits:
+            evidence = "\n".join(hit["text"] for hit in filtered_hits)
         else:
             evidence = merged_text
+            fallback_used = True
+
+        LOGGER.debug(
+            "Case %s field %s retriever hits: total=%d filtered=%d fallback=%s",
+            case_id,
+            field,
+            total_hits,
+            filtered_count,
+            fallback_used,
+        )
         parsed = _generate_structured_output(evidence, llm_cfg)
         extracted = _extract_field(parsed, field)
         per_field[field] = extracted or DEFAULT_FILL
