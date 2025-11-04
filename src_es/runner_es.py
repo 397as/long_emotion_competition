@@ -1,4 +1,9 @@
-"""Runner script for the Emotion Summary (ES) pipeline."""
+"""Emotion Summary (ES) 流水线主脚本。
+
+负责命令行参数解析、检索器构建及结构化信息抽取，
+帮助我们把冗长的咨询记录整理成可提交的摘要结果。
+Runner script for the Emotion Summary pipeline, wiring the CLI interface,
+retriever bootstrap and structured field extraction into one entry point."""
 
 from __future__ import annotations
 
@@ -39,6 +44,12 @@ DEFAULT_FILL = "未见明确描述"
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
+    """创建并返回命令行参数解析器。
+
+    该解析器用于接收配置文件、数据集路径与输出路径等参数，
+    便于通过 CLI 运行 ES 流水线。
+    Build the CLI argument parser that accepts config/data/output paths."""
+
     parser = argparse.ArgumentParser(description="Run the Emotion Summary pipeline")
     parser.add_argument(
         "--config",
@@ -64,11 +75,22 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 
 def load_config(path: str) -> Dict[str, Any]:
+    """加载 YAML 配置文件并转化为字典。
+
+    会在读取失败时抛出底层异常，以便调用方处理。
+    Load YAML configuration into a Python dictionary."""
+
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
 def _stringify_chunks(value: Any) -> Iterable[str]:
+    """将多种类型的字段统一转换为字符串列表。
+
+    支持 str / list / tuple 等常见输入，忽略空白元素，
+    以便拼接成对话原文。
+    Normalize heterogeneous values (str/list/tuple) into non-empty strings."""
+
     if value is None:
         return []
     if isinstance(value, str):
@@ -88,6 +110,11 @@ def _stringify_chunks(value: Any) -> Iterable[str]:
 
 
 def _merge_case(item: Dict[str, Any]) -> str:
+    """合并案例描述中的多个字段，形成单一长文本。
+
+    顺序保持与原始字段一致，便于下游检索和提示构造。
+    Merge textual parts of a counseling case into one string."""
+
     parts: List[str] = []
     parts.extend(_stringify_chunks(item.get("case_description")))
     parts.extend(_stringify_chunks(item.get("consultation_process")))
@@ -96,6 +123,11 @@ def _merge_case(item: Dict[str, Any]) -> str:
 
 
 def _sanitize(text: str) -> str:
+    """清洗模型输出中的多余字符与空白。
+
+    对常见的换行、零宽字符进行规整，确保结果可读。
+    Sanitize whitespace and control characters from model outputs."""
+
     if not text:
         return ""
     cleaned = text.replace("\r", " ")
@@ -107,6 +139,11 @@ def _sanitize(text: str) -> str:
 
 
 def _parse_json_strict(text: str) -> Dict[str, Any]:
+    """尽量从模型回复中解析出 JSON 字典。
+
+    首先尝试直接解析；若失败，则在文本中查找 JSON 子串再解析。
+    Parse JSON object from LLM response, falling back to best-effort search."""
+
     if not text:
         return {}
     try:
@@ -124,6 +161,11 @@ def _parse_json_strict(text: str) -> Dict[str, Any]:
 
 
 def _generate_structured_output(evidence: str, llm_cfg: Dict[str, Any], attempts: int = 2) -> Dict[str, Any]:
+    """调用大模型生成结构化摘要，并在失败时重试。
+
+    根据证据区构造提示词，多次尝试解析 JSON 输出。
+    Generate structured summary via LLM with limited retries."""
+
     for attempt in range(attempts):
         user_prompt = ES_USER_FMT.format(evidence=evidence)
         raw = generate_reply(
@@ -143,6 +185,11 @@ def _generate_structured_output(evidence: str, llm_cfg: Dict[str, Any], attempts
 
 
 def _build_retriever(cfg: Dict[str, Any], records: List[Dict[str, Any]]) -> Retriever:
+    """根据配置构建 ES 任务专用检索器。
+
+    将案例文本合并后交给通用 Retriever，便于召回相关片段。
+    Build the shared Retriever instance for ES records."""
+
     es_cfg = cfg.get("es", {})
     retriever = Retriever(
         embed_model=es_cfg.get("embed_model", "BAAI/bge-m3"),
@@ -162,6 +209,11 @@ def _build_retriever(cfg: Dict[str, Any], records: List[Dict[str, Any]]) -> Retr
 
 
 def _extract_field(parsed: Dict[str, Any], field: str) -> str:
+    """从结构化结果中提取指定字段，返回清洗后的文本。
+
+    会尝试字段映射中的多个候选键，并在缺失时返回空字符串。
+    Extract and sanitize field content from parsed payload."""
+
     for key in FIELD_KEY_MAPPING.get(field, (field,)):
         value = parsed.get(key)
         if isinstance(value, str) and value.strip():
@@ -176,6 +228,11 @@ def process_case(
     retriever: Retriever | None,
     queries: Dict[str, str],
 ) -> Dict[str, Any]:
+    """处理单个案例，生成五大情绪摘要字段。
+
+    若启用检索则结合召回片段；否则直接在合并文本上生成。
+    Process one case to produce five summary fields with optional retrieval."""
+
     case_id = item.get("id")
     case_id_str = str(case_id)
     merged_text = _merge_case(item)
@@ -226,6 +283,11 @@ def process_case(
 
 
 def main() -> None:
+    """命令行入口：加载数据、执行流水线并写出结果。
+
+    初始化日志配置，循环处理案例，并记录潜在错误。
+    CLI entry point orchestrating ES pipeline execution."""
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
