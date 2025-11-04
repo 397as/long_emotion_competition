@@ -7,6 +7,13 @@
 
 两条流水线共享相同的依赖管理、向量检索组件与 LLM 调用辅助工具，可根据需求分别或组合使用。
 
+## 技术栈概览
+- **Python 3.12 + uv**：使用 uv 管理虚拟环境与依赖锁定，确保 MC / ES 流水线共享一致的运行时环境。
+- **FAISS**：负责长文本分块后的向量检索，分别在 `indexes/mc/` 与 `indexes/es/` 中缓存索引结果以复用推理。
+- **Sentence Transformers**：默认采用 `sentence-transformers` 模型抽取嵌入，用于召回与排序候选上下文。
+- **vLLM / OpenAI Chat Completions API**：通过统一的 Chat Completions 接口调用 LLM，可对接自建 vLLM 推理服务或兼容的云端模型。
+- **FlashInfer**：结合 `flashinfer-cubin` 与 `flashinfer-jit-cache` 以加速部分算子，提升在 vLLM 上的推理吞吐。
+
 ## 仓库结构
 - `src_mc/`：情感咨询（MC）流水线的核心实现（检索器、提示词模板、LLM 编排与 CLI 入口）。详细说明见 [`src_mc/README.md`](src_mc/README.md)。
 - `src_es/`：情绪摘要（ES）流水线的实现，包含结构化字段提示词与运行脚本。更多细节见 [`src_es/README.md`](src_es/README.md)。
@@ -16,13 +23,20 @@
 - `pyproject.toml` / `uv.lock`：使用 [uv](https://github.com/astral-sh/uv) 管理的 Python 依赖定义。
 
 ## 环境准备
-项目使用 `uv` 管理环境与依赖，可通过以下命令安装：
+项目基于 **Python 3.12**，并使用 [uv](https://github.com/astral-sh/uv) 管理虚拟环境与依赖。首次使用时建议按以下步骤完成准备：
 
-```bash
-uv sync
-```
+1. **安装系统依赖**：确保已安装 Git 与 Python 3.12（Linux 用户可通过 `apt`/`yum`，macOS 用户可通过 Homebrew）。推荐额外安装 `build-essential` / `xcode-select --install` 以编译少量含 C 扩展的依赖。
+2. **安装 uv**：若尚未安装，可执行 `pip install uv` 或参考官方文档获取预编译发行版。
+3. **同步项目依赖**：在仓库根目录执行：
 
-后续的运行命令均可视需要添加 `uv run` 前缀，以在受控环境中执行。
+   ```bash
+   uv sync
+   ```
+
+   该命令会创建隔离的 `.venv` 环境，并根据 `pyproject.toml` 与 `uv.lock` 解析全部依赖。
+4. **激活虚拟环境（可选）**：如需直接使用解释器，可运行 `source .venv/bin/activate`（Windows 为 `.venv\Scripts\activate`）。
+
+后续运行示例、单元测试或脚本时，均可在命令前添加 `uv run` 前缀，以保证使用到正确的虚拟环境与锁定依赖。
 
 ## 准备推理端点
 流水线假设存在一个兼容 OpenAI Chat Completions 的接口。若本地部署 [vLLM](https://github.com/vllm-project/vllm)，可参考如下命令：
