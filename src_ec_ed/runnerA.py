@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
 import torch
-from peft import PeftModel
 from transformers import AutoTokenizer, AutoModelForCausalLM, TextStreamer
 from rich.console import Console
 from rich.table import Table
@@ -155,16 +154,21 @@ def build_prompt(task: str, sample: Dict[str, Any]) -> str:
     # 尽量兼容 LongEmotion 的统一样式；若字段名不同，可在这里微调
     if task == "emotion_classification":
         ctx = _get(sample, ["context","text","document","passage"])
-        # read from options , sample['choices']: [...] -> [(A, ...), (B, ...)]
         options = [
-            (chr(65 + idx), opt.get("text") if isinstance(opt, dict) else str(opt))
-            for idx, opt in enumerate(sample.get("choices", []))
+            ("A", "Anger"),
+            ("B", "Anxiety"),
+            ("C", "Depression"),
+            ("D", "Frustration"),
+            ("E", "Jealousy"),
+            ("F", "Guilt"),
+            ("G", "Fear"),
+            ("H", "Embarrassment"),
         ]
         opt_str = "\n".join([f"{a}) {b}" for a,b in options])
         return (
             "You are an expert in long-context emotion understanding.\n"
-            "Task: Read the long context and select the best emotion for the TARGET.\n"
-            "Choose ONE option and reply with the LETTER. Do NOT add any other text.\n\n"
+            "Task: Read the long context and select the SINGLE best emotion for the TARGET (if target is absent, infer the dominant emotion in context).\n"
+            "Choose ONE option and reply with the LETTER ONLY (A-H). Do NOT add any other text.\n\n"
             f"Options:\n{opt_str}\n\n"
             f"Context:\n{str(ctx)}\n\n"
             "Answer (LETTER ONLY):"
@@ -275,19 +279,6 @@ def run(args):
         device_map="auto",
         trust_remote_code=True
     )
-
-    if False: # Use the Lora Model
-        # from /data/zhengjb/results/ec/checkpoint-2500/adapter_config.json
-        print("Using PEFT model to load lora weights...")
-        model = PeftModel.from_pretrained(
-            model,
-            "/data/zhengjb/results/ec/checkpoint-2500",
-            torch_dtype=torch_dtype,
-            device_map="auto",
-            trust_remote_code=True
-        )
-
-
     model.eval()
     load_t1 = time.time()
 
@@ -314,7 +305,7 @@ def run(args):
     task_gen = dict(gen_kwargs)
     if args.task_name == "emotion_detection":
         task_gen.update(
-            max_new_tokens=4,   # 索引最多两位数
+            max_new_tokens=2,   # 索引最多两位数
             do_sample=False,
             temperature=0.0,
             top_p=1.0,
@@ -356,20 +347,7 @@ def run(args):
         for idx, sample in enumerate(iter_jsonl(args.test_path), start=1):
             t0 = time.time()
             prompt = build_prompt(args.task_name, sample)
-            messages = [
-                 {"role": "user", "content": ""},
-                 {"role": "assistant", "content": "B"},
-                 {"role": "user", "content": prompt}
-            ]
-            text = (
-                "<|im_start|>user\n"
-                "You are an expert in long-context emotion understanding.\nTask: Read the long context and select the best emotion for the TARGET.\nChoose ONE option and reply with the LETTER. Do NOT add any other text.\n\nOptions:\nA) Delight\nB) Anger\nC) Embarrassment\nD) Hopeless\nE) Pride\nF) Disappointment\n\nContext:\ni had thought tarvik would come to the courtyard as he often did , but i guessed wrong .\ninstead he sent lor back to us with instructions for lor to bring me alone to the castle after dark , and in secret .\ni do n't care much for that idea , i told nance .\nare you afraid to meet alone with tarvik ?\nshe teased"
-                "<|im_end|>\n"
-                "<|im_start|>assistant\nB\n<|im_end|>\n"
-                "<|im_start|>user\n" + prompt + "\n<|im_end|>\n"
-                "<|im_start|>assistant\n"
-            )
-            enc = tok(text, return_tensors="pt", truncation=True, max_length=args.max_len)
+            enc = tok(prompt, return_tensors="pt", truncation=True, max_length=args.max_len)
             toks_in = int(enc["input_ids"].shape[-1])
             toks_in_total += toks_in
             enc = {k: v.to(model.device) for k, v in enc.items()}
@@ -383,20 +361,18 @@ def run(args):
                 text = tok.decode(out[0], skip_special_tokens=True)
                 gen_text = tok.decode(gen_ids, skip_special_tokens=True).strip()
 
-                # —— 任务级后处理 ——, sample -> answer，按照之前给的
-                LETTER2LABEL = [
-                    (chr(65 + idx), opt.get("text") if isinstance(opt, dict) else str(opt))
-                    for idx, opt in enumerate(sample.get("choices", []))
-                ]
-
-                LETTER2LABEL = {k: v for k, v in LETTER2LABEL}
+                # —— 任务级后处理 —— 
+                LETTER2LABEL = {
+                    "A": "Anger", "B": "Anxiety", "C": "Depression", "D": "Frustration",
+                    "E": "Jealousy", "F": "Guilt", "G": "Fear", "H": "Embarrassment",
+                }
 
                 if args.task_name == "emotion_classification":
-                    m = re.search(r"[A-Za-z]", gen_text)
+                    m = re.search(r"[A-Ha-h]", gen_text)
                     if m:
-                        gen_text = LETTER2LABEL.get(m.group(0).upper(), "Unknown: "+gen_text)
+                        gen_text = LETTER2LABEL.get(m.group(0).upper(), "Unknown") + "," + gen_text
                     else:
-                        gen_text = "Unknown"+gen_text
+                        gen_text = "Unknown"+ "," + gen_text
 
 
                 elif args.task_name == "emotion_detection":
@@ -431,7 +407,7 @@ def run(args):
                 "task": args.task_name,
                 "prompt_tokens": toks_in,
                 "output_tokens": toks_out if 'toks_out' in locals() else 0,
-                "prompt_preview": text[:2000],
+                "prompt_preview": prompt[:2000],
                 "output": gen_text
             }
             append_jsonl(args.out_path, result)
